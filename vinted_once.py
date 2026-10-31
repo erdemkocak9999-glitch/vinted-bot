@@ -1,6 +1,6 @@
 """
 Alertes Vinted -> Telegram (GitHub Actions : une exécution = un tour).
-Version 2 : lit les pages du catalogue Vinted (l'ancienne API est fermée).
+Version 3 : lit les pages du catalogue Vinted.
 Nike + Under Armour, 13 à 15 ans, avec photo + prix + lien.
 """
 
@@ -61,7 +61,6 @@ else:
         )
     })
 
-
 def prix_en_float(item):
     p = item.get("price")
     if isinstance(p, dict):
@@ -86,7 +85,6 @@ def correspond(item):
         return False
     return taille_ok(item.get("size_title"))
 
-
 def texte_charge_utile(html):
     """Rassemble le HTML brut + le contenu décodé des scripts Next.js."""
     morceaux = [html]
@@ -98,16 +96,30 @@ def texte_charge_utile(html):
     return "\n".join(morceaux)
 
 
+def normaliser(obj):
+    def texte(v):
+        if isinstance(v, dict):
+            return v.get("title") or v.get("name") or ""
+        return v or ""
+    obj = dict(obj)
+    obj["brand_title"] = texte(obj.get("brand_title") or obj.get("brand"))
+    obj["size_title"] = texte(obj.get("size_title") or obj.get("size"))
+    return obj
+
+
 def extraire_items(html):
     texte = texte_charge_utile(html)
     dec = json.JSONDecoder()
     trouves = {}
-    for m in re.finditer(r'"brand_title"\s*:', texte):
+    dernier_fin = -1
+    for m in re.finditer(r'"price"\s*:', texte):
         pos = m.start()
-        debut_min = max(0, pos - 8000)
+        if pos < dernier_fin:
+            continue
+        debut_min = max(0, pos - 4000)
         i = texte.rfind("{", debut_min, pos)
         essais = 0
-        while i != -1 and i >= debut_min and essais < 40:
+        while i != -1 and i >= debut_min and essais < 15:
             essais += 1
             try:
                 obj, fin = dec.raw_decode(texte, i)
@@ -116,14 +128,38 @@ def extraire_items(html):
                     and fin > pos
                     and "id" in obj
                     and "title" in obj
-                    and "brand_title" in obj
+                    and "price" in obj
                 ):
-                    trouves[obj["id"]] = obj
+                    trouves[obj["id"]] = normaliser(obj)
+                    dernier_fin = fin
                     break
             except Exception:
                 pass
             i = texte.rfind("{", debut_min, i)
     return list(trouves.values())
+
+DIAG_FAIT = False
+
+
+def diagnostic(html, items):
+    """Affiche des indices dans les logs (une seule fois par exécution)."""
+    global DIAG_FAIT
+    if DIAG_FAIT:
+        return
+    DIAG_FAIT = True
+    texte = texte_charge_utile(html)
+    print("  [diag] liens /items/ :", len(re.findall(r'/items/\d+', html)))
+    print("  [diag] taille texte décodé :", len(texte))
+    if items:
+        print("  [diag] clés d'une annonce :", sorted(items[0].keys())[:30])
+        print("  [diag] exemple :", json.dumps(items[0], ensure_ascii=False)[:500])
+        return
+    for mot in ('"price"', "/items/"):
+        k = texte.find(mot)
+        if k != -1:
+            print(f"  [diag] autour de {mot} :", texte[max(0, k - 250): k + 350].replace("\n", " "))
+        else:
+            print(f"  [diag] {mot} introuvable")
 
 
 def chercher(texte):
@@ -135,11 +171,8 @@ def chercher(texte):
     if r.status_code != 200:
         raise RuntimeError(f"HTTP {r.status_code}")
     items = extraire_items(r.text)
-    if not items:
-        print(f"  (aucune annonce lue, page de {len(r.text)} caractères)")
-        print("  début de la page :", r.text[:200].replace("\n", " "))
+    diagnostic(r.text, items)
     return items
-
 
 def url_photo(item):
     p = item.get("photo")
@@ -190,7 +223,6 @@ def envoyer_telegram(item):
         timeout=20,
     )
 
-
 def main():
     vus = set()
     if os.path.exists(FICHIER_VUS):
@@ -238,3 +270,4 @@ def main():
 
 
 if __name__ == "__main__":
+    main()# --- suite ---# --- suite ---# --- suite ---# --- suite ---# --- suite ---# --- suite ---
